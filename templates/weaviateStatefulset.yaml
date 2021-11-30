@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: weaviate
+  labels:
+    name: weaviate
+    app: weaviate
+spec:
+  replicas: {{ .Values.replicas }}
+  serviceName: {{ .Values.service.name }}
+  selector:
+    matchLabels:
+      app: weaviate
+  template:
+    metadata:
+      labels:
+        app: weaviate
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: weaviate
+        image: '{{ .Values.image.registry }}/{{ .Values.image.repo }}:{{ .Values.image.tag }}'
+        imagePullPolicy: Always
+        resources:
+{{ toYaml .Values.resources | indent 10 }}
+        env:
+          - name: STANDALONE_MODE
+            value: 'true'
+          - name: PERSISTENCE_DATA_PATH
+            value: '/var/lib/weaviate'
+          - name: ENABLE_MODULES
+            value: {{ template "enabled_modules" . }}
+          {{ if index .Values "modules" "text2vec-transformers" "enabled" }}
+          - name: TRANSFORMERS_INFERENCE_API
+            value: http://{{ index .Values "modules" "text2vec-transformers" "fullnameOverride" }}.{{ .Release.Namespace }}.svc.cluster.local:8080
+          {{ else if index .Values "modules" "text2vec-transformers" "inferenceUrl" }}
+          - name: TRANSFORMERS_INFERENCE_API
+            value: {{ index .Values "modules" "text2vec-transformers" "inferenceUrl" }}
+          {{ end }}
+          {{ if index .Values "modules" "qna-transformers" "enabled" }}
+          - name: QNA_INFERENCE_API
+            value: http://{{ index .Values "modules" "qna-transformers" "fullnameOverride" }}.{{ .Release.Namespace }}.svc.cluster.local:8080
+          {{ else if index .Values "modules" "qna-transformers" "inferenceUrl" }}
+          - name: QNA_INFERENCE_API
+            value: {{ index .Values "modules" "qna-transformers" "inferenceUrl" }}
+          {{ end }}
+          {{ if index .Values "modules" "img2vec-neural" "enabled" }}
+          - name: IMAGE_INFERENCE_API
+            value: http://{{ index .Values "modules" "img2vec-neural" "fullnameOverride" }}.{{ .Release.Namespace }}.svc.cluster.local:8080
+          {{ else if index .Values "modules" "img2vec-neural" "inferenceUrl" }}
+          - name: IMAGE_INFERENCE_API
+            value: {{ index .Values "modules" "img2vec-neural" "inferenceUrl" }}
+          {{ end }}
+          {{ if index .Values "modules" "text-spellcheck" "enabled" }}
+          - name: SPELLCHECK_INFERENCE_API
+            value: http://{{ index .Values "modules" "text-spellcheck" "fullnameOverride" }}.{{ .Release.Namespace }}.svc.cluster.local:8080
+          {{ else if index .Values "modules" "text-spellcheck" "inferenceUrl" }}
+          - name: SPELLCHECK_INFERENCE_API
+            value: {{ index .Values "modules" "text-spellcheck" "inferenceUrl" }}
+          {{ end }}
+          {{ if index .Values "modules" "ner-transformers" "enabled" }}
+          - name: NER_INFERENCE_API
+            value: http://{{ index .Values "modules" "ner-transformers" "fullnameOverride" }}.{{ .Release.Namespace }}.svc.cluster.local:8080
+          {{ else if index .Values "modules" "ner-transformers" "inferenceUrl" }}
+          - name: NER_INFERENCE_API
+            value: {{ index .Values "modules" "ner-transformers" "inferenceUrl" }}
+          {{ end }}
+        ports:
+          - containerPort: 8080
+        args:
+          - '--host'
+          - '0.0.0.0'
+          - '--port'
+          - '8080'
+          - '--scheme'
+          - 'http'
+          - '--config-file'
+          - '/weaviate-config/conf.yaml'
+        volumeMounts:
+          - name: weaviate-config
+            mountPath: /weaviate-config
+          - name: weaviate-persistence-data-vol
+            mountPath: /var/lib/weaviate
+        livenessProbe:
+          httpGet:
+            path: /v1/.well-known/live
+            port: 8080
+          initialDelaySeconds: 120
+          periodSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /v1/.well-known/ready
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 3
+      volumes:
+        - name: weaviate-config
+          configMap:
+            {{ if .Values.custom_config_map.enabled }}name: {{ .Values.custom_config_map.name }} {{ else }}name: weaviate-config{{ end }}
+        - name: weaviate-persistence-data-vol
+          persistentVolumeClaim:
+            {{ if empty .Values.storage.fullnameOverride }}
+            claimName: weaviate-persistence-data
+            {{ else }}
+            claimName: {{ .Values.storage.fullnameOverride }}
+            {{ end }}

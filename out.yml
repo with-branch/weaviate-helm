@@ -1,0 +1,321 @@
+---
+# Source: weaviate/templates/weaviateConfigMap.yaml
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: weaviate-config
+data:
+  conf.yaml: |-
+    ---
+    authentication:
+      anonymous_access:
+        enabled: true
+    authorization:
+      admin_list:
+        enabled: false
+    
+    query_defaults:
+      limit: 100
+    debug: false
+    default_vectorizer_module: text2vec-contextionary
+
+
+---
+# Source: weaviate/templates/weaviatePersistentVolumeClaim.yaml
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: weaviate-persistence-data
+  labels:
+    app: weaviate
+spec:
+  accessModes:
+    # Only using one replication so far.
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 32Gi
+
+
+---
+# Source: weaviate/templates/nerTransformersService.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: ner-transformers
+spec:
+  type: ClusterIP
+  selector:
+    app: ner-transformers
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+
+
+---
+# Source: weaviate/templates/transformersInferenceService.yaml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: transformers-inference
+spec:
+  type: ClusterIP
+  selector:
+    app: transformers-inference
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+
+
+---
+# Source: weaviate/templates/weaviateService.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: weaviate
+spec:
+  type: LoadBalancer
+  selector:
+    app: weaviate
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+
+---
+# Source: weaviate/templates/nerTransformersDeployment.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ner-transformers
+  labels:
+    name: ner-transformers
+    app: ner-transformers
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ner-transformers
+  template:
+    metadata:
+      labels:
+        app: ner-transformers
+    spec:
+      containers:
+      - name: ner-transformers
+        image: docker.io/semitechnologies/ner-transformers:dbmdz-bert-large-cased-finetuned-conll03-english-0.0.2
+        env:
+          - name: ENABLE_CUDA
+            value: "0"
+          
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 5000Mi
+          requests:
+            cpu: 1000m
+            memory: 3000Mi
+          
+        livenessProbe:
+          httpGet:
+            path: /.well-known/live
+            port: 8080
+          initialDelaySeconds: 120
+          periodSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /.well-known/ready
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 3
+
+
+---
+# Source: weaviate/templates/transformersInferenceDeployment.yaml
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transformers-inference
+  labels:
+    name: transformers-inference
+    app: transformers-inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transformers-inference
+  template:
+    metadata:
+      labels:
+        app: transformers-inference
+    spec:
+      containers:
+      - name: transformers-inference
+        image: docker.io/semitechnologies/transformers-inference:distilbert-base-uncased
+        env:
+          - name: ENABLE_CUDA
+            value: "0"
+          
+        resources: 
+          limits:
+            cpu: 1000m
+            memory: 5000Mi
+          requests:
+            cpu: 1000m
+            memory: 3000Mi
+          
+        livenessProbe:
+          httpGet:
+            path: /.well-known/live
+            port: 8080
+          initialDelaySeconds: 120
+          periodSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /.well-known/ready
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 3
+
+
+---
+# Source: weaviate/templates/weaviateStatefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: weaviate
+  labels:
+    name: weaviate
+    app: weaviate
+spec:
+  replicas: 1
+  serviceName: weaviate
+  selector:
+    matchLabels:
+      app: weaviate
+  template:
+    metadata:
+      labels:
+        app: weaviate
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: weaviate
+        image: 'docker.io/semitechnologies/weaviate:1.7.0'
+        imagePullPolicy: Always
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 1Gi
+          requests:
+            cpu: 500m
+            memory: 300Mi
+          
+        env:
+          - name: STANDALONE_MODE
+            value: 'true'
+          - name: PERSISTENCE_DATA_PATH
+            value: '/var/lib/weaviate'
+          - name: ENABLE_MODULES
+            value: text2vec-transformers,ner-transformers
+          
+          - name: TRANSFORMERS_INFERENCE_API
+            value: http://transformers-inference.default.svc.cluster.local:8080
+          
+          
+          
+          
+          
+          - name: NER_INFERENCE_API
+            value: http://ner-transformers.default.svc.cluster.local:8080
+          
+        ports:
+          - containerPort: 8080
+        args:
+          - '--host'
+          - '0.0.0.0'
+          - '--port'
+          - '8080'
+          - '--scheme'
+          - 'http'
+          - '--config-file'
+          - '/weaviate-config/conf.yaml'
+        volumeMounts:
+          - name: weaviate-config
+            mountPath: /weaviate-config
+          - name: weaviate-persistence-data-vol
+            mountPath: /var/lib/weaviate
+        livenessProbe:
+          httpGet:
+            path: /v1/.well-known/live
+            port: 8080
+          initialDelaySeconds: 120
+          periodSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /v1/.well-known/ready
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 3
+      volumes:
+        - name: weaviate-config
+          configMap:
+            name: weaviate-config
+        - name: weaviate-persistence-data-vol
+          persistentVolumeClaim:
+            
+            claimName: weaviate-persistence-data
+            
+
+---
+# Source: weaviate/templates/collectorProxyConfigMap.yaml
+
+
+---
+# Source: weaviate/templates/collectorProxyDeployment.yaml
+
+
+---
+# Source: weaviate/templates/collectorProxyService.yaml
+
+
+---
+# Source: weaviate/templates/contextionaryDeployment.yaml
+
+
+---
+# Source: weaviate/templates/contextionaryService.yaml
+
+
+---
+# Source: weaviate/templates/img2vecNeuralDeployment.yaml
+
+
+---
+# Source: weaviate/templates/img2vecNeuralService.yaml
+
+
+---
+# Source: weaviate/templates/qnaTransformersDeployment.yaml
+
+
+---
+# Source: weaviate/templates/qnaTransformersService.yaml
+
+
+---
+# Source: weaviate/templates/textSpellcheckDeployment.yaml
+
+
+---
+# Source: weaviate/templates/textSpellcheckService.yaml
+
+
