@@ -32,7 +32,7 @@ storage:
 # weaviate only accessible within your cluster.
 service:
   name: weaviate
-  type: LoadBalancer
+  type: NodePort
 
 # Weaviate Config
 #
